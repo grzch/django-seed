@@ -2,6 +2,7 @@ import random
 
 from django.db.models import ForeignKey, ManyToManyField, OneToOneField
 from django.db.models.fields import AutoField
+from django.contrib.contenttypes.models import ContentType
 
 from django_seed.exceptions import SeederException
 from django_seed.guessers import NameGuesser, FieldTypeGuesser
@@ -39,6 +40,14 @@ class ModelSeeder(object):
 
         for field in self.model._meta.fields:
             field_name = field.name
+
+            if field_name.endswith('_ptr'):
+                continue
+
+            if field_name == 'polymorphic_ctype':
+                formatters[field_name] = ContentType.objects.get_for_model(self.model)
+                continue
+
             if isinstance(field, (ForeignKey, ManyToManyField, OneToOneField)):
                 formatters[field_name] = self.build_relation(field, field.rel.to)
                 continue
@@ -81,10 +90,24 @@ class ModelSeeder(object):
         manager = self.model.objects.db_manager(using=using)
         turn_off_auto_add(manager.model)
 
-        obj = manager.create(**{
-            field: format_field(field_format, inserted_entities)
-            for field, field_format in self.field_formatters.items()
-        })
+        fields = {}
+        m2m_relations = {}
+        for field, field_format in self.field_formatters.items():
+            if isinstance(format_field(field_format, inserted_entities), list):
+                m2m_relations[field] = format_field(field_format, inserted_entities)
+            else:
+                fields[field] = format_field(field_format, inserted_entities)
+
+        # obj = manager.create(**{
+        #     field: format_field(field_format, inserted_entities)
+        #     for field, field_format in self.field_formatters.items()
+        # })
+
+        obj = manager.create(**fields)
+
+        for field, value in m2m_relations.items():
+            setattr(obj, field, value)
+            obj.save()
 
         return obj.pk
 
